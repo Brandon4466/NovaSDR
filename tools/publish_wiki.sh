@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_SLUG="${1:-Steven9101/NovaSDR}"
+REPO_SLUG="${1:-Brandon4466/NovaSDR}"
 WIKI_URL="https://github.com/${REPO_SLUG}.wiki.git"
 
 tmpdir="$(mktemp -d)"

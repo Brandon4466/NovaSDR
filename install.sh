@@ -19,7 +19,6 @@ Optional env vars:
   NOVA_REPO_URL=url-or-path                (override repo clone URL for source mode)
   NOVA_REF=git-ref                          (optional: branch/tag/commit to checkout after clone/update)
   NOVA_SKIP_CLONE=1                        (source mode: use existing checkout; do not git clone/fetch; defaults to current directory)
-  --local                                  (alias for NOVA_SKIP_CLONE=1; use the local source files)
   NOVA_INSTALL_DIR=/opt/novasdr            (default: /opt/novasdr)
   NOVA_BIN_DIR=/usr/local/bin              (default: /usr/local/bin)
   NOVA_SRC_DIR=/opt/novasdr-src            (default: /opt/novasdr-src; source mode only)
@@ -61,7 +60,7 @@ while [ "$#" -gt 0 ]; do
       usage
       exit 0
       ;;
-    --skip-clone|--local)
+    --skip-clone)
       export NOVA_SKIP_CLONE=1
       shift
       ;;
@@ -962,28 +961,9 @@ build_from_source() {
   need_cmd git
 
   skip_clone="${NOVA_SKIP_CLONE:-0}"
-  src_dir="${NOVA_SRC_DIR:-}"
-
-  # Auto-detect if we are in a NovaSDR source tree
-  if [ "$skip_clone" = "0" ] && [ -z "$src_dir" ]; then
-    if [ -f "Cargo.toml" ] && [ -d "crates/novasdr-server" ]; then
-      info "Detected NovaSDR source tree in current directory."
-      skip_clone=1
-      src_dir="$(pwd)"
-    elif [ -f "../Cargo.toml" ] && [ -d "../crates/novasdr-server" ]; then
-      info "Detected NovaSDR source tree in parent directory."
-      skip_clone=1
-      src_dir="$(cd .. && pwd)"
-    fi
-  fi
-
-  if [ -z "$src_dir" ]; then
-    src_dir="${NOVA_SRC_DIR:-$NOVA_SRC_DIR_DEFAULT}"
-  fi
-
+  src_dir="${NOVA_SRC_DIR:-$NOVA_SRC_DIR_DEFAULT}"
   if [ "$skip_clone" = "1" ] && [ -z "${NOVA_SRC_DIR:-}" ]; then
-    # Ensure src_dir is set to something sensible if it's still empty
-    if [ -z "$src_dir" ]; then src_dir="$(pwd)"; fi
+    src_dir="$(pwd)"
   fi
   repo="${NOVA_REPO:-$NOVA_REPO_DEFAULT}"
   repo_url="${NOVA_REPO_URL:-}"
@@ -1156,80 +1136,30 @@ EOF
 ui_banner
 log "${c_dim}Platform:${c_reset} ${os}/${arch_norm}"
 log "${c_dim}Package manager:${c_reset} ${pm}"
+log "${c_dim}Mode:${c_reset} local-source rebuild (skipping system deps, SoapySDR, and device modules)"
 
-install_method="${NOVA_INSTALL_METHOD:-source}"
-if [ "${NOVA_NONINTERACTIVE:-}" = "1" ] && [ -z "${NOVA_INSTALL_METHOD:-}" ]; then
-  install_method="source"
+# Local-install mode: assume a prior full run of this script already installed all system
+# dependencies (build tools, OpenCL, clFFT, SoapySDR, device modules). Just rebuild the Rust
+# server from the current working directory and reinstall the binary + frontend.
+export NOVA_SKIP_CLONE=1
+export NOVA_NONINTERACTIVE=1
+export NOVA_FRONTEND="${NOVA_FRONTEND:-install}"
+
+# Skip re-running the system package installs inside build_from_source. The opencl_mode
+# variable still has to read non-"skip" so the inner clfft "requires OpenCL" gate passes —
+# we only short-circuit the package install steps, not the feature flag itself.
+export NOVA_CLFFT="${NOVA_CLFFT:-skip}"
+export NOVA_VKFFT="${NOVA_VKFFT:-skip}"
+opencl_mode=install
+
+if [ "${NOVA_RUST:-install}" = "install" ]; then
+  install_rustup
 fi
 
-case "$install_method" in
-  source|deps) ;;
-  *)
-    err "Invalid NOVA_INSTALL_METHOD: $install_method (expected source|deps)"
-    exit 1
-    ;;
-esac
+# Drive build_from_source with the same feature defaults compile.sh uses, without prompting.
+# Inside build_from_source the prompt_yes_no calls honour NOVA_NONINTERACTIVE=1 and return the
+# default ("yes" for soapysdr/clfft, "no" for vkfft on linux), so we end up with
+# --features "soapysdr,clfft" — same as compile.sh.
+build_from_source
 
-if [ "$pm" = "none" ]; then
-  warn "No supported package manager detected; some steps will be skipped."
-fi
-
-if [ "${NOVA_SKIP_CLONE:-0}" = "1" ]; then
-  if [ "$install_method" != "source" ]; then
-    warn "NOVA_SKIP_CLONE=1 implies a local source build; forcing NOVA_INSTALL_METHOD=source."
-    install_method="source"
-  fi
-fi
-
-install_packages_common
-
-opencl_mode="${NOVA_OPENCL:-install}"
-if [ "${NOVA_NONINTERACTIVE:-}" = "1" ] && [ -z "${NOVA_OPENCL:-}" ]; then
-  opencl_mode="install"
-fi
-
-install_packages_build_tools
-
-if [ "$opencl_mode" = "install" ]; then
-  if prompt_yes_no "Install OpenCL dependencies?" "yes"; then
-    install_packages_opencl
-  fi
-fi
-
-clfft_mode="${NOVA_CLFFT:-install}"
-if [ "${NOVA_NONINTERACTIVE:-}" = "1" ] && [ -z "${NOVA_CLFFT:-}" ]; then
-  clfft_mode="install"
-fi
-if [ "$opencl_mode" = "install" ] && [ "$clfft_mode" = "install" ]; then
-  if prompt_yes_no "Install clFFT library packages? (required for --features clfft builds)" "yes"; then
-    install_packages_clfft
-    if [ "$os" = "linux" ] && ! clfft_is_available; then
-      warn "clFFT library not found after package install attempt."
-      warn "If you plan to run a clFFT-enabled build, install clFFT manually (Debian/Ubuntu: libclfft-dev)."
-    fi
-  fi
-fi
-
-step "Build + install SoapySDR (from source)" build_and_install_soapysdr_source
-
-if prompt_yes_no "Build and install SoapySDR device module(s) from source now?" "yes"; then
-  build_and_install_soapy_module_source
-fi
-
-if [ "${NOVA_RTLSDR_V4:-}" = "1" ] && [ "$pm" = "apt" ]; then
-  warn "RTL-SDR v4 driver rebuild instructions (review carefully):"
-  print_rtlsdr_v4_instructions_apt
-fi
-
-case "$install_method" in
-  source)
-    if [ "${NOVA_RUST:-install}" = "install" ]; then
-      install_rustup
-    fi
-    build_from_source
-    post_install_notes
-    ;;
-  deps)
-    ok "Dependency install complete."
-    ;;
-esac
+ok "Local rebuild + install complete."

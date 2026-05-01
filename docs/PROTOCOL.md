@@ -35,6 +35,8 @@ Clients send JSON objects with `cmd`:
 - `mute` (`mute`)
 - `squelch` (`enabled`)
 - `agc` (`speed`, optional `attack`, optional `release`)
+- `deemphasis` (`mode`: `"off"`, `"75"`/`"75us"`/`"us"`, or `"50"`/`"50us"`/`"eu"`) — applied only in FM mode
+- `tune` (`hz`: integer Hz) — request that the receiver's LO be retuned so this signal frequency lands at the center of the band. Ignored if the input driver doesn't support runtime retune (stdin/fifo). On success, the server pushes a fresh settings (BasicInfo) message to all audio + waterfall clients of this receiver.
 - `chat` (`username`, `message`, optional `user_id`, optional `reply_to_id`, optional `reply_to_username`)
 
 Notes:

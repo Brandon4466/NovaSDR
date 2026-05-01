@@ -11,11 +11,11 @@ use std::{
     net::IpAddr,
     path::Path,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-        Arc,
+        atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex as StdMutex,
     },
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::warn;
 
 // Audio packets can be bursty (GC pauses, GPU sync, OS scheduler jitter). A slightly deeper queue
@@ -78,12 +78,30 @@ pub struct HeaderPanelLookups {
     pub shortwave_info: bool,
 }
 
+/// Hardware retune callback. Implemented per input driver (currently only SoapySDR).
+///
+/// `set_frequency_hz` returns the actual frequency the device tuned to (may differ from requested
+/// due to step quantization). `frequency_range_hz` returns the inclusive `[min, max]` range the
+/// device supports, or `None` if the driver couldn't enumerate it.
+pub trait Retuner: Send + Sync {
+    fn set_frequency_hz(&self, hz: i64) -> anyhow::Result<i64>;
+    fn frequency_range_hz(&self) -> Option<(i64, i64)>;
+}
+
 pub struct ReceiverState {
     pub receiver: config::ReceiverConfig,
     pub rt: Arc<config::Runtime>,
     pub audio_clients: DashMap<ClientId, Arc<AudioClient>>,
     pub waterfall_clients: Vec<DashMap<ClientId, Arc<WaterfallClient>>>,
     pub signal_changes: DashMap<String, (i32, f64, i32)>,
+    /// Current tuned LO frequency in Hz. Initialized from `receiver.input.frequency` and
+    /// updated when a client retunes via the `tune` command.
+    pub current_lo_hz: AtomicI64,
+    /// Installed by the DSP loop after the input driver opens. None for stdin/fifo inputs.
+    pub retuner: StdMutex<Option<Box<dyn Retuner>>>,
+    /// Pushed when basefreq changes so connected handlers can forward a fresh BasicInfo to their
+    /// websocket. The payload is the receiver_id whose settings changed.
+    pub settings_broadcast: broadcast::Sender<Arc<str>>,
 }
 
 impl ReceiverState {
@@ -93,12 +111,29 @@ impl ReceiverState {
             waterfall_clients.push(DashMap::new());
         }
 
+        let initial_lo = receiver.input.frequency;
+        let (settings_broadcast, _) = broadcast::channel(16);
+
         Self {
             receiver,
             rt,
             audio_clients: DashMap::new(),
             waterfall_clients,
             signal_changes: DashMap::new(),
+            current_lo_hz: AtomicI64::new(initial_lo),
+            retuner: StdMutex::new(None),
+            settings_broadcast,
+        }
+    }
+
+    /// Compute the current basefreq from the live LO. For IQ this is `lo - sps/2`; for real
+    /// signals the basefreq equals the LO.
+    pub fn current_basefreq(&self) -> i64 {
+        let lo = self.current_lo_hz.load(Ordering::Relaxed);
+        if self.rt.is_real {
+            lo
+        } else {
+            lo - self.rt.sps / 2
         }
     }
 }
@@ -264,7 +299,7 @@ impl AppState {
             "fft_size": receiver.rt.fft_size,
             "fft_result_size": receiver.rt.fft_result_size,
             "waterfall_size": receiver.rt.min_waterfall_fft,
-            "basefreq": receiver.rt.basefreq,
+            "basefreq": receiver.current_basefreq(),
             "total_bandwidth": receiver.rt.total_bandwidth,
             "overlap": receiver.rt.fft_size / 2,
             "fft_overlap": receiver.rt.fft_size / 2,
@@ -407,6 +442,7 @@ pub struct AudioParams {
     pub agc_speed: AgcSpeed,
     pub agc_attack_ms: Option<f32>,
     pub agc_release_ms: Option<f32>,
+    pub de_emphasis: novasdr_core::dsp::de_emphasis::DeEmphasisMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,16 +592,18 @@ pub async fn receivers_info(State(state): State<Arc<AppState>>) -> impl IntoResp
         .iter()
         .filter(|r| r.enabled)
         .map(|r| {
-            let rt = state
+            // Reachable frequency range: if the input driver exposes a retuner with a known
+            // frequency range, expand by half the bandwidth so the band stays inside the device
+            // range at every LO position. Otherwise fall back to the static band.
+            let range = state
                 .receiver_state(r.id.as_str())
-                .map(|rx| rx.rt.as_ref())
-                .map(|rt| (rt.basefreq, rt.basefreq + rt.total_bandwidth));
+                .map(|rx| reachable_range(rx));
             json!({
                 "id": r.id,
                 "name": r.name,
                 "driver": r.input.driver.as_str(),
-                "min_hz": rt.map(|(min, _)| min),
-                "max_hz": rt.map(|(_, max)| max),
+                "min_hz": range.map(|(min, _)| min),
+                "max_hz": range.map(|(_, max)| max),
             })
         })
         .collect::<Vec<_>>();
@@ -573,6 +611,31 @@ pub async fn receivers_info(State(state): State<Arc<AppState>>) -> impl IntoResp
         "active_receiver_id": cfg.active_receiver_id,
         "receivers": receivers,
     }))
+}
+
+/// Inclusive `[min, max]` Hz range a client can ask to listen to on this receiver. If the input
+/// driver supports runtime retune, this is the device LO range (extended by half the IQ band).
+/// If not, it's the static band derived from the current LO and sample rate.
+pub fn reachable_range(rx: &Arc<ReceiverState>) -> (i64, i64) {
+    let half_bw = if rx.rt.is_real { 0 } else { rx.rt.sps / 2 };
+    let static_band = (rx.current_basefreq(), rx.current_basefreq() + rx.rt.total_bandwidth);
+    let Ok(guard) = rx.retuner.lock() else {
+        return static_band;
+    };
+    let Some(retuner) = guard.as_ref() else {
+        return static_band;
+    };
+    let Some((lo_min, lo_max)) = retuner.frequency_range_hz() else {
+        return static_band;
+    };
+    if rx.rt.is_real {
+        (lo_min, lo_max.saturating_add(rx.rt.sps / 2))
+    } else {
+        (
+            lo_min.saturating_sub(half_bw),
+            lo_max.saturating_add(half_bw),
+        )
+    }
 }
 
 async fn maybe_load_json(path: &Path) -> Option<serde_json::Value> {

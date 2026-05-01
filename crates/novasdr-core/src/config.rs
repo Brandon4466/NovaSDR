@@ -281,7 +281,7 @@ fn default_updates_check_on_startup() -> bool {
 }
 
 fn default_updates_github_repo() -> String {
-    "Steven9101/NovaSDR".to_string()
+    "Brandon4466/NovaSDR".to_string()
 }
 fn default_fft_size() -> usize {
     131_072

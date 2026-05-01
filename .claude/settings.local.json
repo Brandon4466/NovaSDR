@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(where pkg-config *)",
+      "Bash(npx tsc *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(cargo search *)",
+      "Bash(cargo doc *)",
+      "Bash(cargo check *)"
+    ]
+  }
+}

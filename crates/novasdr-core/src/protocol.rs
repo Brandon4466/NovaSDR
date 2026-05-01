@@ -77,6 +77,12 @@ pub enum ClientCommand {
         #[serde(default)]
         release: Option<f32>,
     },
+    DeEmphasis {
+        mode: String,
+    },
+    Tune {
+        hz: i64,
+    },
     Buffer {
         size: String,
     },

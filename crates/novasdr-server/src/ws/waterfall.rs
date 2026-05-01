@@ -151,6 +151,9 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
         return;
     }
 
+    let mut settings_forwarder =
+        spawn_waterfall_settings_forwarder(&receiver, out_tx.clone());
+
     receiver.waterfall_clients[initial_level].insert(client_id, client.clone());
 
     let idle_timeout = Duration::from_secs(90);
@@ -234,6 +237,11 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
                                 .insert(client_id, client.clone());
                             receiver_id = next_id;
                             receiver = next_receiver;
+                            settings_forwarder.abort();
+                            settings_forwarder = spawn_waterfall_settings_forwarder(
+                                &receiver,
+                                out_tx.clone(),
+                            );
                         } else {
                             receiver.waterfall_clients[next_initial_level]
                                 .insert(client_id, client.clone());
@@ -258,7 +266,39 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
     };
     receiver.waterfall_clients[level].remove(&client_id);
     tracing::info!(client_id, "waterfall ws disconnected");
+    settings_forwarder.abort();
     send_task.abort();
+}
+
+fn spawn_waterfall_settings_forwarder(
+    receiver: &Arc<crate::state::ReceiverState>,
+    out_tx: tokio::sync::mpsc::Sender<WaterfallOutbound>,
+) -> tokio::task::JoinHandle<()> {
+    let mut settings_rx = receiver.settings_broadcast.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match settings_rx.recv().await {
+                Ok(json_arc) => {
+                    if out_tx
+                        .send(WaterfallOutbound::Switch {
+                            settings_json: json_arc.to_string(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        skipped = n,
+                        "waterfall settings forwarder lagged; skipped notifications"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 fn apply_command(

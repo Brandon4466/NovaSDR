@@ -99,16 +99,29 @@ fn run_dsp_loop(
     soapy_semaphore: Arc<Mutex<()>>,
 ) -> anyhow::Result<()> {
     let stop_requested = Arc::new(AtomicBool::new(false));
-    let (input, input_name) =
+    let opened =
         crate::input::open(&receiver.receiver, stop_requested.clone(), soapy_semaphore)?;
     let sample_format = receiver.receiver.input.driver.get_sample_format();
     tracing::info!(
         receiver_id = %receiver.receiver.id,
-        input = input_name,
+        input = opened.driver_name,
         format = ?sample_format,
+        retuner = opened.retuner.is_some(),
         "input opened"
     );
-    let mut reader = SampleReader::new(input, sample_format);
+    if let Some(retuner) = opened.retuner {
+        match receiver.retuner.lock() {
+            Ok(mut guard) => *guard = Some(retuner),
+            Err(poisoned) => {
+                tracing::error!(
+                    receiver_id = %receiver.receiver.id,
+                    "retuner mutex poisoned at install; recovering"
+                );
+                *poisoned.into_inner() = Some(retuner);
+            }
+        }
+    }
+    let mut reader = SampleReader::new(opened.reader, sample_format);
 
     let rt = receiver.rt.clone();
     let settings = FftSettings {

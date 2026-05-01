@@ -1,9 +1,57 @@
+use crate::state::Retuner;
 use anyhow::Context;
 use novasdr_core::config::{ReceiverInput, SampleFormat, SignalType, SoapySdrDriver};
 use soapysdr::StreamSample;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Retuner backed by a cloned SoapySDR `Device`. SoapySDR `Device` is internally refcounted and
+/// thread-safe (the C library guarantees `setFrequency` is safe to call concurrently with stream
+/// reads on supported drivers), so we can keep a separate handle here for runtime LO updates.
+pub struct SoapyRetuner {
+    device: soapysdr::Device,
+    channel: usize,
+}
+
+impl Retuner for SoapyRetuner {
+    fn set_frequency_hz(&self, hz: i64) -> anyhow::Result<i64> {
+        self.device
+            .set_frequency(soapysdr::Direction::Rx, self.channel, hz as f64, ())
+            .with_context(|| format!("retune SoapySDR to {hz} Hz"))?;
+        let actual = self
+            .device
+            .frequency(soapysdr::Direction::Rx, self.channel)
+            .context("read back SoapySDR frequency after retune")?;
+        Ok(actual.round() as i64)
+    }
+
+    fn frequency_range_hz(&self) -> Option<(i64, i64)> {
+        let ranges = self
+            .device
+            .frequency_range(soapysdr::Direction::Rx, self.channel)
+            .ok()?;
+        let mut lo = i64::MAX;
+        let mut hi = i64::MIN;
+        for r in ranges {
+            // SoapySDRRange has minimum/maximum/step (all f64). Step is informational here; we
+            // floor/ceil the bounds so quantization can't push us outside the union.
+            let r_min = r.minimum.floor() as i64;
+            let r_max = r.maximum.ceil() as i64;
+            if r_min < lo {
+                lo = r_min;
+            }
+            if r_max > hi {
+                hi = r_max;
+            }
+        }
+        if lo > hi {
+            None
+        } else {
+            Some((lo, hi))
+        }
+    }
+}
 
 fn to_stream_args(driver: &SoapySdrDriver) -> anyhow::Result<soapysdr::Args> {
     let mut args = soapysdr::Args::new();
@@ -26,7 +74,7 @@ pub fn open(
     input: &ReceiverInput,
     stop_requested: Arc<AtomicBool>,
     soapy_semaphore: Arc<Mutex<()>>,
-) -> anyhow::Result<Box<dyn Read + Send>> {
+) -> anyhow::Result<(Box<dyn Read + Send>, Box<dyn Retuner>)> {
     anyhow::ensure!(
         input.signal == SignalType::Iq,
         "soapysdr input currently requires receiver.input.signal = \"iq\""
@@ -113,7 +161,7 @@ fn open_fmt<E>(
     driver: &SoapySdrDriver,
     input: &ReceiverInput,
     stop_requested: Arc<AtomicBool>,
-) -> anyhow::Result<Box<dyn Read + Send>>
+) -> anyhow::Result<(Box<dyn Read + Send>, Box<dyn Retuner>)>
 where
     E: StreamSample + Copy + Default + Send + 'static,
 {
@@ -147,13 +195,22 @@ where
         .activate(None)
         .context("activate SoapySDR RX stream")?;
 
+    // Clone the device handle for the retune side-channel. SoapySDR `Device` is internally
+    // refcounted, so this is cheap and the handle stays valid as long as either the stream or the
+    // retuner holds it.
+    let retuner: Box<dyn Retuner> = Box::new(SoapyRetuner {
+        device: device.clone(),
+        channel: driver.channel,
+    });
+
     // Use a reasonable internal buffer size (16K complex samples).
     // SoapySDR will fill what it can per read; we accumulate until the caller is satisfied.
-    Ok(Box::new(SoapyRead::new(
+    let reader: Box<dyn Read + Send> = Box::new(SoapyRead::new(
         stream,
         driver.rx_buffer_samples,
         stop_requested,
-    )))
+    ));
+    Ok((reader, retuner))
 }
 
 /// Adapter that turns a SoapySDR RxStream into a blocking `Read` byte-stream,

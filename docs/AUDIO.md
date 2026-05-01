@@ -40,6 +40,18 @@ Supported mode strings:
 
 `FMC` is an alias of `FM` on the backend (the extra CTCSS reduction is a frontend audio filter).
 
+### FM de-emphasis
+
+When the demodulation mode is FM, the backend can optionally apply a single-pole IIR de-emphasis filter to the demodulated audio before DC removal and AGC. Two standard time constants are supported (75µs for the Americas/Korea, 50µs for Europe and most of the rest of the world). The filter is bypassed in any non-FM mode.
+
+Frontend command:
+
+```json
+{ "cmd": "deemphasis", "mode": "75" }
+```
+
+Accepted `mode` values: `"off"`, `"75"` / `"75us"` / `"us"`, `"50"` / `"50us"` / `"eu"`. The default is `"off"`.
+
 ## Squelch (auto, frequency-domain)
 
 The WebSDR squelch is implemented server-side and operates on the current audio window in the frequency domain.

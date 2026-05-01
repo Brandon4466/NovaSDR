@@ -12,6 +12,7 @@ use novasdr_core::{
     dsp::{
         agc::Agc,
         dc_blocker::DcBlocker,
+        de_emphasis::{DeEmphasis, DeEmphasisMode},
         demod::{
             add_complex, add_f32, am_envelope, float_to_i16_centered, negate_complex, negate_f32,
             polar_discriminator_fm, sam_demod, DemodulationMode,
@@ -406,6 +407,7 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
         agc_speed: AgcSpeed::Default,
         agc_attack_ms: None,
         agc_release_ms: None,
+        de_emphasis: DeEmphasisMode::Off,
     };
     let client = Arc::new(AudioClient {
         unique_id: unique_id.clone(),
@@ -460,6 +462,9 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
         send_task.abort();
         return;
     }
+
+    let mut settings_forwarder =
+        spawn_audio_settings_forwarder(&receiver, out_tx.clone(), unique_id.clone());
 
     receiver.audio_clients.insert(client_id, client.clone());
     state.broadcast_signal_changes(
@@ -519,6 +524,7 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
                                 p.agc_speed = AgcSpeed::Default;
                                 p.agc_attack_ms = None;
                                 p.agc_release_ms = None;
+                                p.de_emphasis = DeEmphasisMode::Off;
                             }
                             state.broadcast_signal_changes(
                                 receiver_id.as_str(),
@@ -626,6 +632,17 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
                         {
                             break;
                         }
+
+                        // Re-subscribe to the new receiver's settings broadcast.
+                        settings_forwarder.abort();
+                        settings_forwarder = spawn_audio_settings_forwarder(
+                            &receiver,
+                            out_tx.clone(),
+                            unique_id.clone(),
+                        );
+                    }
+                    novasdr_core::protocol::ClientCommand::Tune { hz } => {
+                        handle_tune_request(&state, receiver_id.as_str(), &receiver, hz).await;
                     }
                     other => {
                         apply_command(&state, receiver_id.as_str(), &receiver, &client, other);
@@ -641,7 +658,129 @@ async fn handle(socket: ws::WebSocket, state: Arc<AppState>, _ip_guard: crate::s
     receiver.audio_clients.remove(&client_id);
     state.broadcast_signal_changes(receiver_id.as_str(), &unique_id, -1, -1.0, -1);
     tracing::info!(client_id, %unique_id, "audio ws disconnected");
+    settings_forwarder.abort();
     send_task.abort();
+}
+
+fn spawn_audio_settings_forwarder(
+    receiver: &Arc<crate::state::ReceiverState>,
+    out_tx: tokio::sync::mpsc::Sender<AudioOutbound>,
+    unique_id: String,
+) -> tokio::task::JoinHandle<()> {
+    let mut settings_rx = receiver.settings_broadcast.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match settings_rx.recv().await {
+                Ok(json_arc) => {
+                    let injected =
+                        with_audio_unique_id(json_arc.to_string(), unique_id.as_str());
+                    if out_tx
+                        .send(AudioOutbound::Switch {
+                            settings_json: injected,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        unique_id = %unique_id,
+                        skipped = n,
+                        "audio settings forwarder lagged; skipped notifications"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+async fn handle_tune_request(
+    state: &Arc<AppState>,
+    receiver_id: &str,
+    receiver: &Arc<crate::state::ReceiverState>,
+    requested_hz: i64,
+) {
+    if requested_hz <= 0 {
+        return;
+    }
+
+    // Place the requested signal frequency at the center of the resulting band:
+    //   IQ:    target_lo = requested_hz                              (basefreq = LO - sps/2)
+    //   Real:  target_lo = requested_hz - total_bandwidth/2          (basefreq = LO)
+    let target_lo = if receiver.rt.is_real {
+        requested_hz - receiver.rt.total_bandwidth / 2
+    } else {
+        requested_hz
+    };
+
+    let actual_lo = {
+        let guard = match receiver.retuner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::error!(receiver_id, "retuner mutex poisoned; recovering");
+                poisoned.into_inner()
+            }
+        };
+        let Some(retuner) = guard.as_ref() else {
+            tracing::debug!(
+                receiver_id,
+                requested_hz,
+                "tune ignored: receiver input does not support runtime retune"
+            );
+            return;
+        };
+        let clamped = match retuner.frequency_range_hz() {
+            Some((lo_min, lo_max)) if target_lo < lo_min || target_lo > lo_max => {
+                let c = target_lo.clamp(lo_min, lo_max);
+                tracing::debug!(
+                    receiver_id,
+                    requested_hz,
+                    target_lo,
+                    clamped = c,
+                    lo_min,
+                    lo_max,
+                    "tune target outside device range; clamping"
+                );
+                c
+            }
+            _ => target_lo,
+        };
+        match retuner.set_frequency_hz(clamped) {
+            Ok(actual) => actual,
+            Err(e) => {
+                tracing::warn!(
+                    receiver_id,
+                    requested_hz,
+                    target_lo = clamped,
+                    error = ?e,
+                    "retune failed"
+                );
+                return;
+            }
+        }
+    };
+
+    // Skip the broadcast if the LO didn't actually move (some drivers snap to the existing tune).
+    let prev = receiver
+        .current_lo_hz
+        .swap(actual_lo, std::sync::atomic::Ordering::Relaxed);
+    if prev == actual_lo {
+        return;
+    }
+
+    tracing::info!(
+        receiver_id,
+        requested_hz,
+        actual_lo,
+        previous_lo = prev,
+        "retuned"
+    );
+
+    let json = state.basic_info_json(receiver_id).await;
+    let _ = receiver.settings_broadcast.send(Arc::from(json));
 }
 
 fn apply_command(
@@ -749,6 +888,31 @@ fn apply_command(
             p.agc_attack_ms = attack;
             p.agc_release_ms = release;
         }
+        novasdr_core::protocol::ClientCommand::DeEmphasis { mode } => {
+            let parsed = DeEmphasisMode::from_str_lower(mode.as_str());
+            let Some(parsed) = parsed else {
+                tracing::debug!(
+                    unique_id = %client.unique_id,
+                    requested = %mode,
+                    "ignoring unknown de-emphasis mode"
+                );
+                return;
+            };
+            let mut p = match client.params.lock() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!(
+                        unique_id = %client.unique_id,
+                        "audio params mutex poisoned; recovering"
+                    );
+                    poisoned.into_inner()
+                }
+            };
+            p.de_emphasis = parsed;
+        }
+        novasdr_core::protocol::ClientCommand::Tune { .. } => {
+            // Handled inline in the receive loop because retune is async.
+        }
         novasdr_core::protocol::ClientCommand::Userid { .. } => {}
         novasdr_core::protocol::ClientCommand::Buffer { .. } => {}
         novasdr_core::protocol::ClientCommand::Chat { .. } => {}
@@ -841,6 +1005,7 @@ pub struct AudioPipeline {
     dc: DcBlocker,
     agc: Agc,
     fm_prev: Complex32,
+    de_emphasis: DeEmphasis,
     last_agc: (AgcSpeed, Option<f32>, Option<f32>),
     squelch: SquelchState,
     opus_encoder: Option<opus::Encoder>,
@@ -942,6 +1107,7 @@ impl AudioPipeline {
             // Match reference defaults.
             agc: Agc::new(0.1, 100.0, 30.0, 100.0, sample_rate as f32),
             fm_prev: Complex32::new(0.0, 0.0),
+            de_emphasis: DeEmphasis::new(sample_rate as f32),
             last_agc: (AgcSpeed::Default, None, None),
             squelch: SquelchState::new(),
             opus_encoder,
@@ -960,6 +1126,7 @@ impl AudioPipeline {
         self.fm_prev = Complex32::new(0.0, 0.0);
         self.dc.reset();
         self.agc.reset();
+        self.de_emphasis.reset();
         self.pcm_accum_i16.clear();
         self.pcm_accum_offset = 0;
     }
@@ -1138,9 +1305,13 @@ impl AudioPipeline {
         }
 
         self.apply_agc_settings(params);
+        self.apply_de_emphasis_settings(params, mode);
 
         let half = self.audio_fft_size / 2;
         let audio_out = &mut self.real[..half];
+        if mode == DemodulationMode::Fm {
+            self.de_emphasis.process(audio_out);
+        }
         self.dc.remove_dc(audio_out);
         self.agc.process(audio_out);
 
@@ -1218,6 +1389,20 @@ impl AudioPipeline {
         }
 
         Ok(out_packets)
+    }
+
+    fn apply_de_emphasis_settings(&mut self, params: &AudioParams, mode: DemodulationMode) {
+        // Outside FM the filter never runs, so keep the state idle. This also avoids carrying
+        // residual state across a mode switch back into FM.
+        if mode != DemodulationMode::Fm {
+            if self.de_emphasis.mode() != DeEmphasisMode::Off {
+                self.de_emphasis.reset();
+            }
+            return;
+        }
+        if self.de_emphasis.mode() != params.de_emphasis {
+            self.de_emphasis.set_mode(params.de_emphasis);
+        }
     }
 
     fn apply_agc_settings(&mut self, params: &AudioParams) {

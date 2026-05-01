@@ -128,7 +128,7 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::Client> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_static("NovaSDR/registration (+https://github.com/Steven9101/NovaSDR)"),
+        HeaderValue::from_static("NovaSDR/registration (+https://github.com/Brandon4466/NovaSDR)"),
     );
 
     if let Ok(parsed) = reqwest::Url::parse(url) {

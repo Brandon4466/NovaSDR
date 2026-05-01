@@ -80,5 +80,5 @@ sequenceDiagram
 
 The repository `docs/` directory is synced into the GitHub wiki using:
 
-- Linux/macOS: `tools/publish_wiki.sh Steven9101/NovaSDR`
-- Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File tools/publish_wiki.ps1 -RepoSlug Steven9101/NovaSDR`
+- Linux/macOS: `tools/publish_wiki.sh Brandon4466/NovaSDR`
+- Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File tools/publish_wiki.ps1 -RepoSlug Brandon4466/NovaSDR`

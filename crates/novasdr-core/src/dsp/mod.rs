@@ -2,6 +2,7 @@ pub mod agc;
 #[cfg(feature = "clfft")]
 pub mod clfft;
 pub mod dc_blocker;
+pub mod de_emphasis;
 pub mod demod;
 pub mod fft;
 pub mod sample;

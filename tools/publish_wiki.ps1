@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $false)]
-  [string]$RepoSlug = "Steven9101/NovaSDR"
+  [string]$RepoSlug = "Brandon4466/NovaSDR"
 )
 
 $ErrorActionPreference = "Stop"
