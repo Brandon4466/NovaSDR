@@ -48,6 +48,8 @@ export function DemodBandwidthPanel({
 
   const [freqText, setFreqText] = useState('');
   const [freqEditing, setFreqEditing] = useState(false);
+  const [loText, setLoText] = useState('');
+  const [loEditing, setLoEditing] = useState(false);
   const zeroIsNoop = useMemo(() => {
     if (centerHz == null) return false;
     return Math.round(centerHz / 1_000) * 1_000 === centerHz;
@@ -64,6 +66,15 @@ export function DemodBandwidthPanel({
     if (centerHz != null && targetHz === Math.round(centerHz)) return;
 
     onSetFrequencyKhz(valueKhz);
+  };
+
+  const applyLoText = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const normalized = trimmed.replace(/\s+/g, '').replace(',', '.');
+    const val = Number(normalized);
+    if (!Number.isFinite(val) || val <= 0) return;
+    onSetHardwareCenterFrequencyKhz?.(val);
   };
 
   return (
@@ -116,17 +127,34 @@ export function DemodBandwidthPanel({
             <Label htmlFor="lo-freq-khz" className="mt-2 block">Hardware LO (kHz)</Label>
             <Input
               id="lo-freq-khz"
-              defaultValue={hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : ''}
-              key={hardwareCenterHz}
+              value={loEditing ? loText : hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : ''}
               inputMode="decimal"
               placeholder={hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : '—'}
+              onFocus={() => {
+                setLoText(hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : '');
+                setLoEditing(true);
+              }}
+              onBlur={(e) => {
+                applyLoText(e.currentTarget.value);
+                setLoEditing(false);
+                setLoText('');
+              }}
               onKeyDown={(e) => {
-                if (e.key !== 'Enter') return;
-                const val = Number((e.currentTarget as HTMLInputElement).value.replace(',', '.'));
-                if (Number.isFinite(val) && val > 0 && onSetHardwareCenterFrequencyKhz) {
-                  onSetHardwareCenterFrequencyKhz(val);
+                if (e.key === 'Escape') {
+                  setLoEditing(false);
+                  setLoText('');
+                  (e.currentTarget as HTMLInputElement).blur();
+                  return;
                 }
+                if (e.key !== 'Enter') return;
+                applyLoText(e.currentTarget.value);
+                setLoEditing(false);
+                setLoText('');
                 (e.currentTarget as HTMLInputElement).blur();
+              }}
+              onChange={(e) => {
+                if (!loEditing) setLoEditing(true);
+                setLoText(e.target.value);
               }}
               className="h-9"
             />

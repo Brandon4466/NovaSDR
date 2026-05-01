@@ -751,7 +751,11 @@ export function WebSdrUi({
                 canWbfm={canWbfm}
                 centerHz={centerHz}
                 bandwidthHz={bandwidthHz}
-                hardwareCenterHz={waterfallSettingsRef.current?.basefreq ?? null}
+                hardwareCenterHz={
+                  waterfallSettingsRef.current
+                    ? waterfallSettingsRef.current.basefreq + waterfallSettingsRef.current.total_bandwidth / 2
+                    : null
+                }
                 onModeChange={setModeForActiveVfo}
                 onSetFrequencyKhz={(khz) => {
                   tuneTo(khz * 1_000);

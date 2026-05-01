@@ -995,7 +995,10 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
     const minHz = basicInfo.basefreq;
     const maxHz = basicInfo.basefreq + basicInfo.total_bandwidth;
     if (centerHz < minHz || centerHz > maxHz) {
-      const targetHz = Math.round(centerHz);
+      // Offset the LO so the desired signal ends up away from the DC spike (center of IQ band).
+      // Shift the LO down by 1/4 of the total bandwidth so the signal appears in the upper half.
+      const offset = Math.round(basicInfo.total_bandwidth / 4);
+      const targetHz = Math.round(centerHz - offset);
       if (lastSentTuneRef.current === targetHz) return;
       if (!send({ cmd: 'tune', hz: targetHz })) return;
       lastSentTuneRef.current = targetHz;
