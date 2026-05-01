@@ -280,21 +280,28 @@ export function WebSdrUi({
       if (nextMode) {
         suppressAutoBandRef.current = true;
         setModeForActiveVfo(nextMode);
+      }
 
-        const settings = waterfallSettingsRef.current;
-        if (settings) {
+      const settings = waterfallSettingsRef.current;
+      if (settings) {
+        const minHz = settings.basefreq;
+        const maxHz = settings.basefreq + settings.total_bandwidth;
+        if (targetHz < minHz || targetHz > maxHz) {
+          setPassbandSet(null);
+          if (receiverId) {
+            pendingExplicitTuneRef.current = { hz: targetHz, mode: sanitizedMode, receiverId };
+          }
+        } else if (nextMode) {
           const pb = passbandForTune(settings, targetHz, sanitizedMode);
           if (pb) {
             passbandSetNonceRef.current += 1;
             setPassbandSet({ nonce: passbandSetNonceRef.current, l: pb.l, m: pb.m, r: pb.r });
           }
         }
-      }
-
-      const settings = waterfallSettingsRef.current;
-      if (!settings && receiverId) {
+      } else if (!settings && receiverId) {
         pendingExplicitTuneRef.current = { hz: targetHz, mode: sanitizedMode, receiverId };
       }
+
       defaultsAppliedRef.current = true;
       requestFrequencySetHz(targetHz);
     },
