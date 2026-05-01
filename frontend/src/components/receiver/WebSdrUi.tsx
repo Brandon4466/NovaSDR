@@ -750,26 +750,31 @@ export function WebSdrUi({
                 canWbfm={canWbfm}
                 centerHz={centerHz}
                 bandwidthHz={bandwidthHz}
+                hardwareCenterHz={waterfallSettingsRef.current?.basefreq ?? null}
                 onModeChange={setModeForActiveVfo}
                 onSetFrequencyKhz={(khz) => {
+                  tuneTo(khz * 1_000);
+                }}
+                onSetHardwareCenterFrequencyKhz={(khz) => {
+                  // This uses the exact same logic as frequency tuning, which naturally retunes the LO.
                   tuneTo(khz * 1_000);
                 }}
                 onFrequencyAdjustKhz={(khz) => {
                   if (khz === 0) {
                     if (centerHz !== null) {
                       const roundedKhz = Math.round(centerHz / 1_000);
-                  tuneTo(roundedKhz * 1_000);
-                  return;
-                }
-                requestResetTune(currentVfoRef.current);
-                return;
-              }
-              requestFrequencyAdjustHz(Math.round(khz * 1_000));
-            }}
-            onBandwidthAdjustHz={(delta) => {
-              requestBandwidthAdjustHz(delta);
-            }}
-          />
+                      tuneTo(roundedKhz * 1_000);
+                      return;
+                    }
+                    requestResetTune(currentVfoRef.current);
+                    return;
+                  }
+                  requestFrequencyAdjustHz(Math.round(khz * 1_000));
+                }}
+                onBandwidthAdjustHz={(delta) => {
+                  requestBandwidthAdjustHz(delta);
+                }}
+              />
             </div>
             <div className="lg:col-span-4 lg:row-span-1 lg:min-h-0">
               <AudioPanel

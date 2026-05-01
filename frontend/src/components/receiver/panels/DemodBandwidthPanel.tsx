@@ -22,6 +22,8 @@ type Props = {
   onSetFrequencyKhz: (khz: number) => void;
   onFrequencyAdjustKhz: (khz: number) => void;
   onBandwidthAdjustHz: (deltaHz: number) => void;
+  hardwareCenterHz?: number | null;
+  onSetHardwareCenterFrequencyKhz?: (khz: number) => void;
 };
 
 const BANDWIDTH_STEPS_HZ = [-1000, -100, 100, 1000] as const;
@@ -36,6 +38,8 @@ export function DemodBandwidthPanel({
   onSetFrequencyKhz,
   onFrequencyAdjustKhz,
   onBandwidthAdjustHz,
+  hardwareCenterHz,
+  onSetHardwareCenterFrequencyKhz,
 }: Props) {
   const displayKhz = useMemo(() => {
     if (centerHz === null) return null;
@@ -105,6 +109,24 @@ export function DemodBandwidthPanel({
               onChange={(e) => {
                 if (!freqEditing) setFreqEditing(true);
                 setFreqText(e.target.value);
+              }}
+              className="h-9"
+            />
+            
+            <Label htmlFor="lo-freq-khz" className="mt-2 block">Hardware LO (kHz)</Label>
+            <Input
+              id="lo-freq-khz"
+              defaultValue={hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : ''}
+              key={hardwareCenterHz}
+              inputMode="decimal"
+              placeholder={hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : '—'}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                const val = Number((e.currentTarget as HTMLInputElement).value.replace(',', '.'));
+                if (Number.isFinite(val) && val > 0 && onSetHardwareCenterFrequencyKhz) {
+                  onSetHardwareCenterFrequencyKhz(val);
+                }
+                (e.currentTarget as HTMLInputElement).blur();
               }}
               className="h-9"
             />
