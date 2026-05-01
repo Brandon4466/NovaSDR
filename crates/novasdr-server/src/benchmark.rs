@@ -47,6 +47,7 @@ fn ssb_benchmark(iterations: usize) -> anyhow::Result<()> {
         agc_speed: AgcSpeed::Off,
         agc_attack_ms: None,
         agc_release_ms: None,
+        de_emphasis: novasdr_core::dsp::de_emphasis::DeEmphasisMode::Off,
     };
 
     for idx in 0..iterations {
