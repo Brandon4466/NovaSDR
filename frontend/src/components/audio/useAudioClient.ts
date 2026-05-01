@@ -988,8 +988,6 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
 
   useEffect(() => {
     if (!basicInfo || centerHz == null) return;
-    if (audioWindow) return;
-
     // Auto-retune: if the requested signal frequency is outside the receiver's current band,
     // ask the backend to retune the LO. The backend will respond with a fresh BasicInfo, which
     // updates basefreq and re-runs this effect to send the window command at the new offset.
@@ -1002,6 +1000,8 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
       lastSentTuneRef.current = targetHz;
       return;
     }
+
+    if (audioWindow) return;
 
     const win = computeAudioWindow(basicInfo, effectiveDemod, centerHz);
     if (!win) return;
