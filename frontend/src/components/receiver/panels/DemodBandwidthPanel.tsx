@@ -22,8 +22,6 @@ type Props = {
   onSetFrequencyKhz: (khz: number) => void;
   onFrequencyAdjustKhz: (khz: number) => void;
   onBandwidthAdjustHz: (deltaHz: number) => void;
-  hardwareCenterHz?: number | null;
-  onSetHardwareCenterFrequencyKhz?: (khz: number) => void;
 };
 
 const BANDWIDTH_STEPS_HZ = [-1000, -100, 100, 1000] as const;
@@ -38,8 +36,6 @@ export function DemodBandwidthPanel({
   onSetFrequencyKhz,
   onFrequencyAdjustKhz,
   onBandwidthAdjustHz,
-  hardwareCenterHz,
-  onSetHardwareCenterFrequencyKhz,
 }: Props) {
   const displayKhz = useMemo(() => {
     if (centerHz === null) return null;
@@ -48,8 +44,6 @@ export function DemodBandwidthPanel({
 
   const [freqText, setFreqText] = useState('');
   const [freqEditing, setFreqEditing] = useState(false);
-  const [loText, setLoText] = useState('');
-  const [loEditing, setLoEditing] = useState(false);
   const zeroIsNoop = useMemo(() => {
     if (centerHz == null) return false;
     return Math.round(centerHz / 1_000) * 1_000 === centerHz;
@@ -58,23 +52,12 @@ export function DemodBandwidthPanel({
   const applyFrequencyText = (raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) return;
-    const normalized = trimmed.replace(/\s+/g, '').replace(',', '.');
-    const valueKhz = Number(normalized);
-    if (!Number.isFinite(valueKhz) || valueKhz <= 0) return;
+    const targetHz = parseFrequencyInputHz(trimmed);
+    if (targetHz == null) return;
 
-    const targetHz = Math.round(valueKhz * 1_000);
     if (centerHz != null && targetHz === Math.round(centerHz)) return;
 
-    onSetFrequencyKhz(valueKhz);
-  };
-
-  const applyLoText = (raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return;
-    const normalized = trimmed.replace(/\s+/g, '').replace(',', '.');
-    const val = Number(normalized);
-    if (!Number.isFinite(val) || val <= 0) return;
-    onSetHardwareCenterFrequencyKhz?.(val);
+    onSetFrequencyKhz(targetHz / 1_000);
   };
 
   return (
@@ -120,41 +103,6 @@ export function DemodBandwidthPanel({
               onChange={(e) => {
                 if (!freqEditing) setFreqEditing(true);
                 setFreqText(e.target.value);
-              }}
-              className="h-9"
-            />
-            
-            <Label htmlFor="lo-freq-khz" className="mt-2 block">Hardware LO (kHz)</Label>
-            <Input
-              id="lo-freq-khz"
-              value={loEditing ? loText : hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : ''}
-              inputMode="decimal"
-              placeholder={hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : '—'}
-              onFocus={() => {
-                setLoText(hardwareCenterHz != null ? (hardwareCenterHz / 1000).toFixed(3) : '');
-                setLoEditing(true);
-              }}
-              onBlur={(e) => {
-                applyLoText(e.currentTarget.value);
-                setLoEditing(false);
-                setLoText('');
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  setLoEditing(false);
-                  setLoText('');
-                  (e.currentTarget as HTMLInputElement).blur();
-                  return;
-                }
-                if (e.key !== 'Enter') return;
-                applyLoText(e.currentTarget.value);
-                setLoEditing(false);
-                setLoText('');
-                (e.currentTarget as HTMLInputElement).blur();
-              }}
-              onChange={(e) => {
-                if (!loEditing) setLoEditing(true);
-                setLoText(e.target.value);
               }}
               className="h-9"
             />
@@ -228,4 +176,17 @@ export function DemodBandwidthPanel({
       </CardContent>
     </Card>
   );
+}
+
+function parseFrequencyInputHz(raw: string): number | null {
+  const normalized = raw.trim().replace(/\s+/g, '').replace(',', '.').toLowerCase();
+  const match = normalized.match(/^(\d+(?:\.\d+)?)(hz|khz|mhz)?$/);
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+
+  const unit = match[2] ?? 'khz';
+  const multiplier = unit === 'mhz' ? 1_000_000 : unit === 'hz' ? 1 : 1_000;
+  return Math.round(value * multiplier);
 }

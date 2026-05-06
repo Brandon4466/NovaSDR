@@ -26,7 +26,6 @@ type Props = {
   centerHz: number | null;
   settings: AudioUiSettings;
   audioWindow?: AudioWindow | null;
-  forceRetuneHz?: number | null;
   onPcm?: (pcm: Float32Array, sampleRate: number) => void;
 };
 
@@ -95,7 +94,7 @@ function parseAudioWireFrame(buf: ArrayBuffer): AudioWireFrame | null {
 }
 
 
-export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerHz, settings, audioWindow, forceRetuneHz, onPcm }: Props) {
+export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerHz, settings, audioWindow, onPcm }: Props) {
   const settingsRef = useRef<AudioUiSettings>(settings);
   const onPcmRef = useRef<Props['onPcm']>(onPcm);
   const decoderRef = useRef<Audio | null>(null);
@@ -995,7 +994,7 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
     // The backend tune command accepts the desired hardware center frequency.
     const minHz = basicInfo.basefreq;
     const maxHz = basicInfo.basefreq + basicInfo.total_bandwidth;
-    const desiredCenterHz = Math.round(centerHz + TARGET_CENTER_OFFSET_HZ);
+    const desiredCenterHz = Math.round(centerHz - TARGET_CENTER_OFFSET_HZ);
     const currentCenterHz = Math.round(minHz + basicInfo.total_bandwidth / 2);
     if (currentCenterHz !== desiredCenterHz && lastSentTuneRef.current !== desiredCenterHz) {
       if (send({ cmd: 'tune', hz: desiredCenterHz })) {
@@ -1025,16 +1024,6 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
     if (!send({ cmd: 'window', l: normalized.l, r: normalized.r, m: normalized.m })) return;
     lastWindowRef.current = key;
   }, [audioWindow, basicInfo, connectionNonce, receiverSessionNonce, send]);
-
-  const lastForceRetuneRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (forceRetuneHz != null && forceRetuneHz !== lastForceRetuneRef.current) {
-      lastForceRetuneRef.current = forceRetuneHz;
-      if (send({ cmd: 'tune', hz: Math.round(forceRetuneHz) })) {
-        lastSentTuneRef.current = Math.round(forceRetuneHz);
-      }
-    }
-  }, [forceRetuneHz, send]);
 
   useEffect(() => {
     if (!basicInfo) return;

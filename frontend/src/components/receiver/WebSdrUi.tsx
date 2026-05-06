@@ -57,7 +57,6 @@ export function WebSdrUi({
   const [bandwidthAdjust, setBandwidthAdjust] = useState<{ nonce: number; deltaHz: number } | null>(null);
   const [frequencySet, setFrequencySet] = useState<{ nonce: number; centerHz: number } | null>(null);
   const [resetTune, setResetTune] = useState<{ nonce: number; vfo: 'A' | 'B' } | null>(null);
-  const [forceRetuneHz, setForceRetuneHz] = useState<number | null>(null);
   const [audioWindow, setAudioWindow] = useState<{ l: number; m: number; r: number } | null>(null);
   const [waterfallDisplay, setWaterfallDisplay] = useState<WaterfallDisplaySettings>({
     minDb: -30,
@@ -751,23 +750,9 @@ export function WebSdrUi({
                 canWbfm={canWbfm}
                 centerHz={centerHz}
                 bandwidthHz={bandwidthHz}
-                hardwareCenterHz={
-                  waterfallSettingsRef.current
-                    ? waterfallSettingsRef.current.basefreq + waterfallSettingsRef.current.total_bandwidth / 2
-                    : null
-                }
                 onModeChange={setModeForActiveVfo}
                 onSetFrequencyKhz={(khz) => {
                   tuneTo(khz * 1_000);
-                }}
-                onSetHardwareCenterFrequencyKhz={(khz) => {
-                  const targetHz = Math.round(khz * 1_000);
-                  setForceRetuneHz(targetHz);
-                  setAudioWindow(null);
-                  setPassbandSet(null);
-                  if (receiverId && centerHz != null) {
-                    pendingExplicitTuneRef.current = { hz: centerHz, mode: liveRef.current.mode, receiverId };
-                  }
                 }}
                 onFrequencyAdjustKhz={(khz) => {
                   if (khz === 0) {
@@ -793,7 +778,6 @@ export function WebSdrUi({
                 mode={mode}
                 centerHz={centerHz}
                 audioWindow={audioWindow}
-                forceRetuneHz={forceRetuneHz}
                 settings={audioSettings}
                 onChange={(action) => {
                   onAudioSettingsChange((prev) => {

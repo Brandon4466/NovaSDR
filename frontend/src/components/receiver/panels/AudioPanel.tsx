@@ -18,7 +18,6 @@ type Props = {
   mode: ReceiverMode;
   centerHz: number | null;
   audioWindow?: { l: number; m: number; r: number } | null;
-  forceRetuneHz?: number | null;
   settings: AudioUiSettings;
   onChange: React.Dispatch<React.SetStateAction<AudioUiSettings>>;
   onDebugStatsChange: React.Dispatch<React.SetStateAction<AudioDebugStats | null>>;
@@ -33,7 +32,6 @@ export function AudioPanel({
   mode,
   centerHz,
   audioWindow,
-  forceRetuneHz,
   settings,
   onChange,
   onDebugStatsChange,
@@ -41,7 +39,7 @@ export function AudioPanel({
   onAudioMaxSpsChange,
   onPcm,
 }: Props) {
-  const audio = useAudioClient({ receiverId, receiverSessionNonce, mode, centerHz, settings, audioWindow, forceRetuneHz, onPcm });
+  const audio = useAudioClient({ receiverId, receiverSessionNonce, mode, centerHz, settings, audioWindow, onPcm });
 
   useEffect(() => {
     onDebugStatsChange(audio.debugStats);
