@@ -30,6 +30,8 @@ type Props = {
   onPcm?: (pcm: Float32Array, sampleRate: number) => void;
 };
 
+const TARGET_CENTER_OFFSET_HZ = 500_000;
+
 function isBassBoostMode(mode: ReceiverMode): boolean {
   return mode === 'AM' || mode === 'SAM' || mode === 'FM' || mode === 'FMC';
 }
@@ -989,19 +991,19 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
 
   useEffect(() => {
     if (!basicInfo || centerHz == null) return;
-    // Auto-retune: if the requested signal frequency is outside the receiver's current band,
-    // ask the backend to retune the LO. The backend will respond with a fresh BasicInfo, which
-    // updates basefreq and re-runs this effect to send the window command at the new offset.
+    // Keep the hardware center frequency offset from the requested signal.
+    // The backend tune command accepts the desired hardware center frequency.
     const minHz = basicInfo.basefreq;
     const maxHz = basicInfo.basefreq + basicInfo.total_bandwidth;
+    const desiredCenterHz = Math.round(centerHz + TARGET_CENTER_OFFSET_HZ);
+    const currentCenterHz = Math.round(minHz + basicInfo.total_bandwidth / 2);
+    if (currentCenterHz !== desiredCenterHz && lastSentTuneRef.current !== desiredCenterHz) {
+      if (send({ cmd: 'tune', hz: desiredCenterHz })) {
+        lastSentTuneRef.current = desiredCenterHz;
+      }
+    }
+
     if (centerHz < minHz || centerHz > maxHz) {
-      // Offset the LO so the desired signal ends up away from the DC spike (center of IQ band).
-      // Shift the LO down by 1/4 of the total bandwidth so the signal appears in the upper half.
-      const offset = Math.round(basicInfo.total_bandwidth / 4);
-      const targetHz = Math.round(centerHz - offset);
-      if (lastSentTuneRef.current === targetHz) return;
-      if (!send({ cmd: 'tune', hz: targetHz })) return;
-      lastSentTuneRef.current = targetHz;
       return;
     }
 
