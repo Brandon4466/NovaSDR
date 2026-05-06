@@ -982,11 +982,9 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
     lastDemodRef.current = effectiveDemod;
   }, [connectionNonce, effectiveDemod, receiverSessionNonce, send]);
 
-  // After any BasicInfo update (initial settings, receiver switch, or auto-retune response),
-  // clear the dedup guard so a subsequent tune request to the same Hz will go through.
   useEffect(() => {
     lastSentTuneRef.current = null;
-  }, [basicInfo]);
+  }, [centerHz, connectionNonce, receiverSessionNonce]);
 
   useEffect(() => {
     if (!basicInfo || centerHz == null) return;
@@ -995,6 +993,7 @@ export function useAudioClient({ receiverId, receiverSessionNonce, mode, centerH
     const minHz = basicInfo.basefreq;
     const maxHz = basicInfo.basefreq + basicInfo.total_bandwidth;
     const desiredCenterHz = Math.round(centerHz - TARGET_CENTER_OFFSET_HZ);
+    if (desiredCenterHz <= 0) return;
     const currentCenterHz = Math.round(minHz + basicInfo.total_bandwidth / 2);
     if (currentCenterHz !== desiredCenterHz && lastSentTuneRef.current !== desiredCenterHz) {
       if (send({ cmd: 'tune', hz: desiredCenterHz })) {
